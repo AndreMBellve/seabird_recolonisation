@@ -1,0 +1,221 @@
+;; Code to compute density /distribution functions for various distributions
+
+;; Cauchy  density (x = point of interest, loc = location, scl = scale)
+to-report d-cauchy [x loc scl]
+  report (1 / pi) * ( scl / ((x - loc) ^ 2 + scl ^ 2 ) )
+end    
+
+;; Deviate from Cauchy distribution with location (loc) and scale (scl)
+;; From: Devroye, L. 1986. Non-Uniform Random Variate Generation, Springer, NY
+
+to-report r-cauchy [loc scl]
+  let X (pi * (random-float 1)) ;; Netlogo tan takes degrees not radians
+  report loc + scl * tan(X * (180 / pi))
+
+end
+
+;; generate a binomial deviate (N, p)
+to-report random-binomial [n p]
+  report length filter [a -> a] n-values n [random-float 1 < p]
+end  
+
+;; generate a lognormal deviate with specified mean and sd
+to-report random-lognormal [m s]
+  let x ln (1 + (s / m) ^ 2)
+  let mu ln m - x / 2
+  let sigma sqrt x
+  report exp (mu + random-normal 0 1 * sigma)
+end
+
+;; cdf of Gaussian distribution (canonical)
+to-report cdf-normal [x]
+  let s x
+  let v x
+  let i 1
+
+  while [i < 100]
+  [
+    set v (v * x * x / (2 * i + 1))
+    set s  s + v
+    set i i + 1
+  ]
+
+  report 0.5 + (s / sqrt(2 * pi)) * exp(-( x * x) / 2)
+end
+
+;; cdf of log-Normal distribution
+
+to-report cdf-lnormal[x mu sd]
+   let x-scale (ln(x) - mu) / sd
+   report cdf-normal x-scale
+end
+
+;; Gaussian density return location + scale * tan(M_PI * unif_rand(rng)); (x = point of interest, mu = mean, sigma = SD)
+to-report d-gaussian [x mu sigma]
+  report (1 / (sqrt (2 * pi)  * sigma )) * exp (-((x - mu) ^ 2) / (2 * sigma ^ 2) )
+end
+
+;; Deviate from Pareto distribution (code from VGAM)
+;; See Forbes et al. 2011, Chapter 34
+;; Mean ca/(c-1) for c > 1 and variance ca^2/[(c − 1)^2(c − 2)] for c > 2
+
+;; Deviate from Pareto distribution (code from VGAM)
+;; See Forbes et al. 2011, Chapter 34
+;; Mean ca/(c-1) for c > 1 and variance ca^2/[(c − 1)^2(c − 2)] for c > 2
+
+to-report random-pareto [xm alpha] 
+
+  if xm <= 0 or alpha <= 0 [error "Invalid pareto value" ]
+	let ans xm / (random-float 1) ^ (1 / alpha)
+
+  report ans
+end
+
+;; see: https://stackoverflow.com/questions/38493122/draw-a-random-beta-distribution-in-netlogo
+;; see: https://www.mathworks.com/help/symbolic/mupad_ref/stats-betarandom.html
+;; "The implemented algorithm for the computation of the beta deviates uses gamma deviates x, y to produce a 
+;; beta deviate x/(x + y). For more information see: D. Knuth, Seminumerical Algorithms (1998), Vol. 2, p. 134."
+
+to-report random-beta [ alpha beta ]
+  let XX random-gamma alpha 1
+  let YY random-gamma beta 1
+  report XX / (XX + YY)
+end
+
+to-report get-alpha [mu var] 
+  report (((1 - mu) / var) - (1 / mu)) * (mu ^ 2)
+end
+
+to-report get-beta [mu alpha] 
+  report alpha * (1 / mu - 1)
+end  
+
+to-report get-beta-params [ mu var ] 
+     let alpha ((1 - mu) / var - 1 / mu) * mu ^ 2
+     let beta alpha * (1 / mu - 1)
+     report (list alpha beta)
+end
+
+; This binomial algorithm from
+; Devroye. L. 1960. Generating the maximum of independent identically
+; distributed random variables. Computers and Mathematics with
+; Applications 6, 305-315.
+; should be a bit quicker because it only needs ~ np random-float calls
+; Based on code from
+; https://stackoverflow.com/questions/23561551/a-efficient-binomial-random-number-generator-code-in-java#23574723
+to-report binomial [n p]
+  ; need to trap p = 0 and p = 1
+  if p = 1 [ report n ]
+  if p = 0 [ report 0 ]
+  let ln-q ln (1 - p)
+  let x 0
+  let s 0
+  ; also need to avoid x = n
+  while [x < n] [
+    set s s + ln (random-float 1) / (n - x)
+    if s < ln-q [
+      report x
+    ]
+    set x x + 1
+  ]
+  report x
+end
+
+;; perform repeated binomial draws from population n
+;; without replacement, with p based on ratios determined
+;; from the list of frequencies supplied - these can be floats
+;; although if ints can be arranged, then use multinomial-int
+;; instead as it will be quicker
+;; rescale? allows pre-calculation of the relative frequencies
+;; if true the provided frequencies are calculated as we go
+;; if false the provided frequencies can be used as-is
+;; this could be useful for the spatial kernel where the frequencies
+;; do not change
+to-report multinomial-float [n frequencies rescale?]
+  let conditional-freqs []
+  ifelse rescale?
+  [ set conditional-freqs conditional-probabilities frequencies ]
+  [ set conditional-freqs frequencies ]
+  ;; empty list for the results
+  let result []
+  ;; remember how many values we will need
+  let num-values length conditional-freqs
+  ;; keep going as long as we haven't drawn all n
+  while [sum result < n] [
+    ;; the next draw is based on the proportion of
+    ;; the remaining total represented by the first number
+    ;; first time around this will be n0 / total
+    ;; then it will be n1 / (total - n0), and so on
+    let px first conditional-freqs
+    ;; meanwhile the number remaining to be drawn is n - sum result, so...
+    ifelse px > 0
+    [ set result sentence result binomial (n - sum result) px ]
+    [ set result sentence result 0 ]
+    set conditional-freqs but-first conditional-freqs
+  ]
+  ;; if the result is not the required length then pack it with zeros
+  ifelse length result < num-values
+  [ report pack-zeros result num-values true]
+  [ report result ]
+end
+
+;; this works ONLY with integer frequencies but is faster than the -float version
+;; because that way we are guaranteed to get a final probability of 1
+;; (because floating-point arithmetic with small numbers is unreliable
+;; and will often produce rescaled probabilities that terminate with
+;; a value greater or less than 1. Greater than will cause an error
+;; in the binomial draw and less than may cause the total not to sum
+;; to n, since there is a small probability the last case won't happen
+to-report multinomial-int [n frequencies rescale?]
+  let conditional-freqs []
+  ifelse rescale?
+  [ set conditional-freqs conditional-probabilities frequencies ]
+  [ set conditional-freqs frequencies ]
+  report reduce [ [a p] -> lput (ifelse-value (p > 0) [binomial (n - sum a) p] [0]) a] fput [] conditional-freqs
+end
+
+
+;; for a provided list of relative frequencies [f_i]
+;; returns the conditional probabilities [f_i / sum_i..n f_i]
+to-report conditional-probabilities [frequencies]
+  report (map [ [f s] -> ifelse-value (s > 0) [f / s] [0] ] frequencies cumulative-remainder frequencies)
+end
+
+;; for a list [x_i] returns [sum_i..n x_i]
+;; e.g. 1 2 3 4 5 6 --> 21 20 18 15 11 6
+;; same as reverse cumulative-sum reverse L
+to-report cumulative-remainder [L]
+  report but-last reduce [ [a b] -> lput (last a - b) a ] fput (list sum L) L
+end
+
+to-report cumulative-sum [L]
+  report but-first reduce [ [a b] -> lput (last a + b) a ] fput [0] L
+end
+
+
+;; pack list out to length 0 with zeros
+;; either post-pack or pre-pack depending on post
+to-report pack-zeros [lst n post?]
+  ifelse post?
+  [ report sublist (sentence lst n-values n [x -> 0]) 0 n ]
+  [ report sublist (sentence n-values n [x -> 0] lst) 0 n ]
+end
+
+
+;;c1 changes the slope of the line
+;;c2 marks the x for which the probability is 50%
+to-report random-sigmoid [ x c1 c2 ]
+  report 1 / (1 + (exp((-1 * c1) * (x - c2))))
+end
+
+to-report dbeta [x a b]
+  report (1 / stats:beta a b) * (x ^ (a - 1)) * ((1 - x) ^ (b - 1))
+end  
+
+
+to-report asymptotic-pdf [ x b1 b2 ] 
+  report b1 * (1 - exp (-1 * b2 * x))
+end
+
+
+
